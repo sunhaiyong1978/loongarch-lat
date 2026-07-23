@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        container: [ 'latx-runner-aosc:loong64', 'latx-runner-debian:loong64', 'lat-runner-fedora:loongarch64' ]
+        container: [ 'latx-runner-aosc:loong64', 'latx-runner-debian:loong64', 'latx-runner-fedora:loongarch64' ]
         type: [ 'build-release', 'build32', 'build32-dbg', 'build64', 'build64-dbg' ]
 
     steps:
