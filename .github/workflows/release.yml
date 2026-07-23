@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        container: [ 'latx-runner-aosc', 'latx-runner-debian' ]
+        container: [ 'latx-runner-aosc:loong64', 'latx-runner-debian:loong64', 'lat-runner-fedora:loongarch64' ]
         type: [ 'build-release', 'build32', 'build32-dbg', 'build64', 'build64-dbg' ]
 
     steps:
@@ -55,7 +55,7 @@ jobs:
 
       - name: "Build LATX"
         run: |
-          DOCKER_IMAGE="ghcr.io/${{ github.repository_owner }}/${{ matrix.container }}:loong64"
+          DOCKER_IMAGE="ghcr.io/${{ github.repository_owner }}/${{ matrix.container }}"
           DOCKER_CMD="./latxbuild/${{ matrix.type }}.sh -c"
           docker run --rm \
             --platform linux/loong64 \
