@@ -3467,6 +3467,7 @@ bool pageflags_set_clear(target_ulong start, target_ulong last,
     return inval_tb;
 }
 
+#ifdef CONFIG_LATX_AOT
 static void add_smc_node(tb_page_addr_t start, tb_page_addr_t end)
 {
     TranslationBlock *tb;
@@ -3520,6 +3521,7 @@ static void add_smc_node(tb_page_addr_t start, tb_page_addr_t end)
         }
     }
 }
+#endif
 
 /*
  * Modify the flags of a page and invalidate the code if necessary.
@@ -3599,9 +3601,11 @@ void page_set_flags_tb_reload(target_ulong start, target_ulong end,
     }
 
     if (inval_tb) {
+#ifdef CONFIG_LATX_AOT
         if (tb_reload) {
             add_smc_node(start, end);
         }
+#endif
         tb_invalidate_phys_range(start, end);
     }
 #ifdef CONFIG_LATX_PERF
@@ -5906,10 +5910,10 @@ int shared_private_interpret(siginfo_t *info, ucontext_t *uc)
             info->si_addr = (void *)siaddr;
             return 1;
         }
-        value = *(char *)real_guest_addr;
+        value = over_page_read(real_guest_addr, 1);
         if ((uint8_t)value == (uint8_t)UC_GR(uc)[rd]) {
             /* set new value */
-            *(char *)real_guest_addr = (char)new_value;
+            over_page_write(real_guest_addr, new_value, 1);
         }
         value = value << 56 >> 56;
         UC_GR(uc)[rd] = value;

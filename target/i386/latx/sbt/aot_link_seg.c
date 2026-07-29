@@ -10,15 +10,23 @@
  * @brief AOT optimization
  */
 #include "aot_link_seg.h"
+#include "qemu/error-report.h"
 #include "latx-options.h"
 #include "reg-map.h"
 #include "accel/tcg/internal.h"
 
 #ifdef CONFIG_LATX_AOT
-static aot_link_info *aot_global_info;
-static int aot_global_info_total;
-static int aot_global_info_index;
+enum {
+    AOT_MODE_LOAD_ALL = 2,
+    AOT_LINK_PAGE_INITIAL_CAPACITY = 512,
+    AOT_LINK_SEGMENT_INITIAL_CAPACITY = 100000,
+};
 
+static aot_link_info *aot_global_info;
+static size_t aot_global_info_total;
+static size_t aot_global_info_index;
+
+#if defined(CONFIG_LATX_JRRA) || defined(CONFIG_LATX_JRRA_STACK)
 static void patch_jrra(aot_link_info *info)
 {
     TranslationBlock *tb = info->curr;
@@ -50,6 +58,7 @@ static void patch_jrra(aot_link_info *info)
     patch[0] = 0x800;
     patch[1] = 0x50000000 | (3 << 10);
 }
+#endif
 
 __inline static void link_aot_tb(aot_link_info *info)
 {
@@ -73,7 +82,7 @@ __inline static void link_aot_tb(aot_link_info *info)
 
 void try_aot_link(void)
 {
-    for (int i = 0; i < aot_global_info_index; i++) {
+    for (size_t i = 0; i < aot_global_info_index; i++) {
         aot_link_info *info = aot_global_info + i;
         link_aot_tb(info);
 #if defined(CONFIG_LATX_JRRA) || defined(CONFIG_LATX_JRRA_STACK)
@@ -87,8 +96,12 @@ void try_aot_link(void)
 
 void aot_link_tree_init(void)
 {
-    aot_global_info_total = 100000;
-    aot_global_info = malloc(aot_global_info_total * sizeof(aot_link_info));
+    if (option_aot == AOT_MODE_LOAD_ALL) {
+        aot_global_info_total = AOT_LINK_SEGMENT_INITIAL_CAPACITY;
+    } else {
+        aot_global_info_total = AOT_LINK_PAGE_INITIAL_CAPACITY;
+    }
+    aot_global_info = g_new(aot_link_info, aot_global_info_total);
     aot_global_info_index = 0;
 }
 
@@ -96,9 +109,24 @@ void aot_link_tree_insert(TranslationBlock *curr,
         target_ulong aim1_pc, target_ulong aim2_pc)
 {
     if (aot_global_info_index >= aot_global_info_total) {
-        aot_global_info_total += 1000;
-        aot_global_info = realloc(aot_global_info,
-            aot_global_info_total * sizeof(aot_link_info));
+        size_t new_total;
+        aot_link_info *new_info;
+
+        if (aot_global_info_total >
+            SIZE_MAX / 2 / sizeof(*aot_global_info)) {
+            warn_report_once("AOT link table capacity overflow; "
+                             "skipping additional AOT links");
+            return;
+        }
+        new_total = aot_global_info_total << 1;
+        new_info = g_try_renew(aot_link_info, aot_global_info, new_total);
+        if (!new_info) {
+            warn_report_once("Could not grow AOT link table; "
+                             "skipping additional AOT links");
+            return;
+        }
+        aot_global_info = new_info;
+        aot_global_info_total = new_total;
     }
     aot_link_info *info = aot_global_info + aot_global_info_index;
     info->curr = curr;

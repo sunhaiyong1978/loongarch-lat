@@ -694,13 +694,18 @@ abi_long target_mmap(abi_ulong start, abi_ulong len, int target_prot,
     uint64_t host_offset;
     int shadow_fd = -1;
 
-#ifndef TARGET_X86_64
     /* Hacking wine user_shared_data mapping to avoid shadow page */
     if (start == 0x7ffe0000 && len == 0x1000 && (flags == (MAP_FIXED | MAP_SHARED)) && fd > 0
         && (qemu_host_page_size > TARGET_PAGE_SIZE)) {
         len = 0x4000;
+        target_prot |= PROT_WRITE;
     }
-#endif
+    /* Hacking wine syscall dispatcher for signal x86_64 */
+    if (start == 0x7ffe1000 && len == 0x1000 && (flags == (MAP_FIXED | MAP_PRIVATE | MAP_ANON)) && fd == -1 
+        && (qemu_host_page_size > TARGET_PAGE_SIZE)) {
+        return start;
+    }
+
     if (start && option_mmap_fixed)
         flags |= MAP_FIXED;
 
@@ -724,6 +729,27 @@ abi_long target_mmap(abi_ulong start, abi_ulong len, int target_prot,
         errno = ENOMEM;
         goto fail;
     }
+
+#ifdef MAP_FIXED_NOREPLACE
+    /* Check guest mappings before replacing the pre-reserved host range. */
+    if (flags & MAP_FIXED_NOREPLACE) {
+        if (start & ~TARGET_PAGE_MASK) {
+            errno = EINVAL;
+            goto fail;
+        }
+        if (!guest_range_valid_untagged(start, len)) {
+            errno = ENOMEM;
+            goto fail;
+        }
+        if (page_find_range_empty(start, start + len - 1, len,
+                                  TARGET_PAGE_SIZE) != start) {
+            errno = EEXIST;
+            goto fail;
+        }
+        flags &= ~MAP_FIXED_NOREPLACE;
+        flags |= MAP_FIXED;
+    }
+#endif
 
     if (option_prlimit && rlimit_as_account && (vir_rlimit_as != RLIM_INFINITY)
         && (len + vir_rlimit_as_acc >= vir_rlimit_as)) {
@@ -1069,6 +1095,7 @@ abi_long target_mmap(abi_ulong start, abi_ulong len, int target_prot,
     wine_sec_info * wine_sec = NULL;
     uint64_t aot_offset = offset;
     if (option_aot_wine && option_aot) {
+        wine_dll_track_sections(start, len, offset, fd);
         wine_sec = wine_sec_tree_lookup(start);
     }
     if (option_aot && ((fd > 2 && (target_prot & PROT_EXEC)) || wine_sec)) {

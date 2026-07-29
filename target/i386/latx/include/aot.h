@@ -291,9 +291,11 @@ typedef struct aot_rel {
 extern aot_rel *rel_table;
 extern seg_info **seg_info_vector;
 void mk_aot_dir(char * pathname);
+void aot_set_process_profile(int argc, char **argv);
 void dump_aot_buffer(aot_header *p_header);
 void dump_seg(aot_segment *p_segment, aot_header *p_header);
-lib_info *aot_load(char *lib_name, void **curr_aot_buffer);
+lib_info *aot_load(char *lib_name, char *aot_file_name,
+                   void **curr_aot_buffer);
 void aot_tb_register(TranslationBlock *tb);
 void aot_do_tb_reloc(TranslationBlock *tb, struct aot_tb *stb,
     target_ulong seg_begin, target_ulong seg_end);
@@ -310,7 +312,7 @@ void clear_rel_table(void);
 void recover_aot_tb(char *lib_name, uint64_t aot_offset,
         abi_long start, abi_long len);
 
-void do_generate_aot(int first_seg_in_lib, int end_seg_in_lib);
+int do_generate_aot(int first_seg_in_lib, int end_seg_in_lib);
 struct aot_segment *aot_find_segment(char *path, int offset,
         void *curr_aot_buffer);
 
@@ -339,7 +341,8 @@ extern aot_rel *aot_rel_table;
 extern aot_file_info *aot_buffer_all;
 extern int aot_buffer_all_num;
 
-void get_aot_path(const char *lib_name, char *file_path);
+int get_aot_path(const char *lib_name, char *file_path,
+                 size_t file_path_size);
 char in_share_list(char *lib);
 char in_black_list(char *lib);
 char in_white_list(char *lib);

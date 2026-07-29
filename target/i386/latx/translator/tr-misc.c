@@ -662,6 +662,7 @@ bool translate_callthunk(IR1_INST *pir1)
     return true;
 }
 
+static uint64_t hacking_addr;
 
 bool translate_callin(IR1_INST *pir1)
 {
@@ -669,6 +670,25 @@ bool translate_callin(IR1_INST *pir1)
     IR2_OPND succ_x86_addr_opnd = ra_alloc_dbt_arg2();
     load_ireg_from_ir1_2(succ_x86_addr_opnd, ir1_get_opnd(pir1, 0), ZERO_EXTENSION,
                          false);
+
+    IR1_OPND *opnd0 = ir1_get_opnd(pir1, 0);
+    if (ir1_opnd_is_mem(opnd0) &&
+        !ir1_opnd_has_base(opnd0) &&
+        !ir1_opnd_has_index(opnd0) &&
+        ir1_opnd_uimm_addr(opnd0) == 0x7ffe1000
+        /* && *(uint64_t *)0x7ffe1000 */
+        )
+    {
+        if (!hacking_addr) {
+            hacking_addr = *(uint64_t *)0x7ffe1000;
+        }
+        if (hacking_addr) {
+            IR2_OPND asd = ra_alloc_label();
+            la_bnez(succ_x86_addr_opnd, asd);
+            li_d(succ_x86_addr_opnd, hacking_addr);
+            la_label(asd);
+        }
+    }
 
     /*
      * 2. adjust esp
@@ -1134,11 +1154,12 @@ bool translate_int_syscall(IR1_INST *pir1)
     /* 3. add itmp2 to itmp1, so we get the array member corresponding to      */
     /*    the syscall;                                                         */
     /* 4. if itmp2 equals to 0, goes optimized way, otherwise traditional way. */
+    li_wu(syscall_specified, syscall_optimize_confirm_count);
+    la_bgeu(eax_opnd, syscall_specified, label_traditionanl);
     aot_load_host_addr(syscall_optimize_arr,
                         (ADDR)lsenv->syscall_optimize_confirm,
                         LOAD_SYSCALL_OPTIMIZE_CONFIRM, 0);
-    la_add_addr(syscall_optimize_arr,
-                                syscall_optimize_arr, eax_opnd);
+    la_add_d(syscall_optimize_arr, syscall_optimize_arr, eax_opnd);
     la_ld_b(syscall_specified,
                                 syscall_optimize_arr, 0x0);
     la_beq(syscall_specified,
@@ -1167,7 +1188,7 @@ bool translate_int_syscall(IR1_INST *pir1)
     la_or(a5_ir2_opnd, zero_ir2_opnd, ra_alloc_gpr(ebp_index));
 
     /* 3. translate int to syscall(LA), and its' code operand is 0x0 by default */
-    la_syscall(ir2_opnd_new(IR2_OPND_IMM, 0x0));
+    la_syscall(0);
 
     /* 4. save the return value to EAX(s0) */
     la_or(s0_ir2_opnd, zero_ir2_opnd, a0_ir2_opnd);
@@ -1203,8 +1224,8 @@ bool translate_int_syscall(IR1_INST *pir1)
     /* 4. store curr_tb to last_executed_tb */
     IR2_OPND tb_opnd = ra_alloc_itemp();
     aot_load_host_addr(tb_opnd, (ADDR)tb, LOAD_TB_ADDR, 0);
-    la_store_addr(tb_opnd, env_ir2_opnd,
-                      lsenv_offset_of_last_executed_tb(lsenv));
+    la_st_d(tb_opnd, env_ir2_opnd,
+            lsenv_offset_of_last_executed_tb(lsenv));
     ra_free_temp(tb_opnd);
 
     /* 5. call helper function */

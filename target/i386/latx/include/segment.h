@@ -27,7 +27,9 @@ typedef struct seg_info {
     };
 #define SEG_RUNNING     0x1
 #define IS_ELF_SEG      0x2
+#define SEG_AOT_LOADED  0x4
     uint8_t seg_flag;
+    uint8_t aot_file_type;
 } seg_info;
 
 typedef struct wine_sec_info {
@@ -72,6 +74,8 @@ typedef struct wine_sec_head {
 
 bool wine_dll_handle(char *file_name, int name_len, int target_prot,
     abi_ulong map_start, abi_ulong map_len, int map_offset, int map_fd);
+bool wine_dll_track_sections(abi_ulong map_start, abi_ulong map_len,
+                             int map_offset, int map_fd);
 void wine_sec_tree_init(void);
 wine_sec_info *wine_sec_tree_lookup(target_ulong pc);
 void segment_tree_init(void);
@@ -85,5 +89,8 @@ void segment_tree_remove(seg_info *val);
 bool segment_tree_winepe_lookup(target_ulong pc);
 gint get_segment_num(void);
 void do_segment_record(seg_info **seg_info_vector);
+int segment_get_aot_file_name(const seg_info *seg, char *name,
+                              size_t name_size);
+extern const char *aot_process_profile;
 
 #endif

@@ -16,10 +16,56 @@
 #ifdef CONFIG_LATX_AOT
 static GTree *segment_tree;
 static GTree *wine_sec_tree;
+
+int segment_get_aot_file_name(const seg_info *seg, char *name,
+                              size_t name_size)
+{
+    char *path_hash;
+    const char *base;
+    const char *profile_suffix = "";
+    int len;
+
+    if (!seg || !seg->file_name || !name || !name_size) {
+        return -EINVAL;
+    }
+    path_hash = g_compute_checksum_for_string(G_CHECKSUM_SHA256,
+                                              seg->file_name, -1);
+    if (!path_hash) {
+        return -ENOMEM;
+    }
+    base = strrchr(seg->file_name, '/');
+    base = base ? base + 1 : seg->file_name;
+    if (option_aot_pe_profile && !strcasecmp(base, "libcef.dll")) {
+        profile_suffix = aot_process_profile;
+    }
+    if (seg->aot_file_type & (PE_AOT_FILE | CACHE_AOT_FILE)) {
+        len = snprintf(name, name_size, "v2-%02x-%s-%" PRIx64 "%s%s",
+                       seg->aot_file_type, path_hash,
+                       (uint64_t)seg->seg_begin,
+                       profile_suffix[0] ? "-" : "", profile_suffix);
+    } else {
+        len = snprintf(name, name_size, "v2-%02x-%s",
+                       seg->aot_file_type, path_hash);
+    }
+    g_free(path_hash);
+    if (len < 0 || (size_t)len >= name_size) {
+        return -ENAMETOOLONG;
+    }
+    return 0;
+}
+
 static void seg_delete(gconstpointer a) {
     seg_info *oldkey = (seg_info *)a;
+    char aot_file_name[PATH_MAX];
+
     lsassert(oldkey);
     lsassert(oldkey->file_name);
+    if ((oldkey->seg_flag & SEG_AOT_LOADED) && oldkey->buffer &&
+        (oldkey->aot_file_type & (PE_AOT_FILE | CACHE_AOT_FILE)) &&
+        segment_get_aot_file_name(oldkey, aot_file_name,
+                                  sizeof(aot_file_name)) == 0) {
+        lib_tree_remove(aot_file_name);
+    }
     free(oldkey->file_name);
     free(oldkey);
 }
@@ -155,6 +201,7 @@ void segment_tree_insert(char *name, target_ulong offset, target_ulong begin,
     seg->buffer = NULL;
     seg->p_segment = NULL;
     seg->seg_flag = 0;
+    seg->aot_file_type = get_file_type(name);
     if (is_elf_file(name)) {
        seg->seg_flag = IS_ELF_SEG;
     }
@@ -290,11 +337,31 @@ bool wine_dll_handle(char *file_name, int name_len, int target_prot,
            break;
         }
     }
-    if (is_pe && (target_prot & PROT_EXEC) && map_offset == 0) {
+    if (is_pe && map_offset == 0) {
         return wine_dll_inset_sec(map_start, map_len, map_fd);
     }
 
     return false;
+}
+
+bool wine_dll_track_sections(abi_ulong map_start, abi_ulong map_len,
+                             int map_offset, int map_fd)
+{
+    char path[64];
+    char file_name[PATH_MAX];
+    int name_len;
+
+    if (map_fd <= 2 || map_offset != 0) {
+        return false;
+    }
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", map_fd);
+    name_len = readlink(path, file_name, sizeof(file_name) - 1);
+    if (name_len <= 4) {
+        return false;
+    }
+    file_name[name_len] = '\0';
+    return wine_dll_handle(file_name, name_len, 0, map_start, map_len,
+                           map_offset, map_fd);
 }
 
 seg_info *segment_tree_lookup(target_ulong pc)
