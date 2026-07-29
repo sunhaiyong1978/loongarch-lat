@@ -36,6 +36,7 @@ jobs:
           - { NAME: 'latx-runner-aosc', ARCH_NAME: 'loong64' }
           - { NAME: 'latx-runner-debian', ARCH_NAME: 'loong64' }
           - { NAME: 'latx-runner-fedora', ARCH_NAME: 'loongarch64' }
+          - { NAME: 'latx-runner-gcc16', ARCH_NAME: 'loongarch64' }
         type: [ 'build-release', 'build32', 'build32-dbg', 'build64', 'build64-dbg' ]
 
     steps:
