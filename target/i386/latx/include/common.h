@@ -45,10 +45,6 @@
 #define offsetof(st, m) __builtin_offsetof(st, m)
 #endif
 
-#ifndef _Bool
-#define _Bool char
-#endif
-
 #ifndef bool
 #define bool _Bool
 #endif
