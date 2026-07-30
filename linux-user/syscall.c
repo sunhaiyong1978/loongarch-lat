@@ -64,6 +64,7 @@
 #include <linux/in6.h>
 #include <linux/errqueue.h>
 #include <linux/random.h>
+#include <linux/sctp.h>
 #ifdef CONFIG_TIMERFD
 #include <sys/timerfd.h>
 #endif
@@ -2667,12 +2668,24 @@ static inline abi_long host_to_target_cmsg(struct target_msghdr *target_msgh,
 static abi_long do_setsockopt(int sockfd, int level, int optname,
                               abi_ulong optval_addr, socklen_t optlen)
 {
+    struct {
+        uint8_t sctp_data_io_event;
+        uint8_t sctp_association_event;
+        uint8_t sctp_address_event;
+        uint8_t sctp_send_failure_event;
+        uint8_t sctp_peer_error_event;
+        uint8_t sctp_shutdown_event;
+        uint8_t sctp_partial_delivery_event;
+        uint8_t sctp_adaptation_layer_event;
+    } target_sctp_events;
     abi_long ret;
     int val;
     struct ip_mreqn *ip_mreq;
     struct ip_mreq_source *ip_mreq_source;
     struct group_req *group_req;
     struct tpacket_req *req;
+    struct sctp_event_subscribe sctp_events;
+    void *sctp_opt;
 
     switch(level) {
     case SOL_TCP:
@@ -2702,6 +2715,9 @@ static abi_long do_setsockopt(int sockfd, int level, int optname,
         case IP_UNICAST_IF:
 #ifdef IP_FREEBIND
         case IP_FREEBIND:
+#endif
+#ifdef IP_MULTICAST_ALL
+        case IP_MULTICAST_ALL:
 #endif
         case IP_MULTICAST_IF:
         case IP_MULTICAST_TTL:
@@ -2751,6 +2767,40 @@ static abi_long do_setsockopt(int sockfd, int level, int optname,
         default:
             goto unimplemented;
         }
+        break;
+    case IPPROTO_SCTP:
+        if (optname == SCTP_EVENTS) {
+            if (optlen != sizeof(target_sctp_events)) {
+                goto unimplemented;
+            }
+
+            /* The x86 JDK uses the legacy eight-byte subscription structure. */
+            memset(&sctp_events, 0, sizeof(sctp_events));
+            if (copy_from_user(&target_sctp_events, optval_addr,
+                               sizeof(target_sctp_events))) {
+                return -TARGET_EFAULT;
+            }
+            memcpy(&sctp_events, &target_sctp_events, sizeof(target_sctp_events));
+            ret = get_errno(setsockopt(sockfd, level, optname, &sctp_events,
+                                       sizeof(sctp_events)));
+            break;
+        }
+
+        if (optname == SCTP_INITMSG) {
+            if (optlen != sizeof(struct sctp_initmsg)) {
+                goto unimplemented;
+            }
+        } else if (optname != SCTP_SOCKOPT_BINDX_ADD &&
+                   optname != SCTP_SOCKOPT_BINDX_REM) {
+                goto unimplemented;
+        }
+
+        sctp_opt = lock_user(VERIFY_READ, optval_addr, optlen, 1);
+        if (!sctp_opt && optlen > 0) {
+            return -TARGET_EFAULT;
+        }
+        ret = get_errno(setsockopt(sockfd, level, optname, sctp_opt, optlen));
+        unlock_user(sctp_opt, optval_addr, 0);
         break;
     case SOL_IPV6:
         switch (optname) {
@@ -2837,6 +2887,46 @@ static abi_long do_setsockopt(int sockfd, int level, int optname,
 
             ret = get_errno(setsockopt(sockfd, level, optname,
                                        &ipv6mreq, sizeof(ipv6mreq)));
+            break;
+        }
+        case MCAST_JOIN_SOURCE_GROUP:
+        case MCAST_LEAVE_SOURCE_GROUP:
+        case MCAST_BLOCK_SOURCE:
+        case MCAST_UNBLOCK_SOURCE:
+        {
+            struct group_source_req req;
+            abi_long req_ret;
+            abi_ulong target_group_addr;
+            abi_ulong target_source_addr;
+
+            if (optlen != sizeof(struct target_group_source_req)) {
+                return -TARGET_EINVAL;
+            }
+            if (get_user_u32(req.gsr_interface, optval_addr)) {
+                return -TARGET_EFAULT;
+            }
+            req.gsr_interface = tswap32(req.gsr_interface);
+
+            target_group_addr = optval_addr +
+                offsetof(struct target_group_source_req, gsr_group);
+            req_ret = target_to_host_sockaddr(
+                sockfd, (struct sockaddr *)&req.gsr_group, target_group_addr,
+                sizeof(struct target_sockaddr_storage));
+            if (req_ret) {
+                return req_ret;
+            }
+
+            target_source_addr = optval_addr +
+                offsetof(struct target_group_source_req, gsr_source);
+            req_ret = target_to_host_sockaddr(
+                sockfd, (struct sockaddr *)&req.gsr_source, target_source_addr,
+                sizeof(struct target_sockaddr_storage));
+            if (req_ret) {
+                return req_ret;
+            }
+
+            ret = get_errno(setsockopt(sockfd, level, optname,
+                                       &req, sizeof(req)));
             break;
         }
         default:
@@ -3181,6 +3271,7 @@ static abi_long do_getsockopt(int sockfd, int level, int optname,
     abi_long ret;
     int len, val;
     socklen_t lv;
+    void *sctp_opt;
 
     switch(level) {
     case TARGET_SOL_SOCKET:
@@ -3619,6 +3710,32 @@ get_timeout:
         }
         break;
 #endif /* SOL_NETLINK */
+    case IPPROTO_SCTP:
+        if (optname != SCTP_GET_LOCAL_ADDRS &&
+            optname != SCTP_GET_PEER_ADDRS) {
+            goto unimplemented;
+        }
+        if (get_user_u32(len, optlen)) {
+            return -TARGET_EFAULT;
+        }
+        if (len < sizeof(struct sctp_getaddrs)) {
+            return -TARGET_EINVAL;
+        }
+        sctp_opt = lock_user(VERIFY_WRITE, optval_addr, len, 1);
+        if (!sctp_opt) {
+            return -TARGET_EFAULT;
+        }
+        lv = len;
+        ret = get_errno(getsockopt(sockfd, level, optname, sctp_opt, &lv));
+        if (ret < 0) {
+            unlock_user(sctp_opt, optval_addr, 0);
+            return ret;
+        }
+        unlock_user(sctp_opt, optval_addr, lv);
+        if (put_user_u32(lv, optlen)) {
+            return -TARGET_EFAULT;
+        }
+        break;
     case SOL_CAN_RAW:
     {
         char * can_raw_val;
@@ -9114,12 +9231,6 @@ static void cleanup_guest_thread_resources(CPUArchState *env)
 {
     assert(env->gdt.base);
     target_munmap(env->gdt.base, sizeof(uint64_t) * TARGET_GDT_ENTRIES, 0);
-#ifdef CONFIG_LATX_FAST_JMPCACHE
-    if (env->tb_jmp_cache_ptr) {
-        free(env->tb_jmp_cache_ptr);
-        env->tb_jmp_cache_ptr = NULL;
-    }
-#endif
 }
 
 /* clone_lock is held and at least one other guest thread exists. */
@@ -9127,11 +9238,19 @@ static void QEMU_NORETURN exit_guest_thread_locked(CPUArchState *env)
 {
     CPUState *cpu = env_cpu(env);
     TaskState *ts = cpu->opaque;
+#ifdef CONFIG_LATX_FAST_JMPCACHE
+    CPUX86State *x86env = env;
+    void *fast_jmp_cache = x86env->tb_jmp_cache_ptr;
+#endif
 
     object_property_set_bool(OBJECT(cpu), "realized", false, NULL);
     object_unparent(OBJECT(cpu));
     object_unref(OBJECT(cpu));
     pthread_mutex_unlock(&clone_lock);
+
+#ifdef CONFIG_LATX_FAST_JMPCACHE
+    latx_fast_jmp_cache_free_rcu(fast_jmp_cache);
+#endif
 
     if (ts->child_tidptr) {
         put_user_u32(0, ts->child_tidptr);
@@ -12704,14 +12823,6 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
             aot_exit_entry(cpu, true);
         }
 #endif
-#ifdef CONFIG_LATX_FAST_JMPCACHE
-        {
-            CPUX86State *x86env = env;
-            if (arg1 == getpid() && x86env->tb_jmp_cache_ptr && target_to_host_signal(arg2) == SIGKILL) {
-                free(x86env->tb_jmp_cache_ptr);
-            }
-        }
-#endif
         return get_errno(safe_kill(arg1, target_to_host_signal(arg2)));
 #ifdef TARGET_NR_rename
     case TARGET_NR_rename:
@@ -14371,14 +14482,6 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         /* dump basic block here. TODO */
 #ifdef CONFIG_LATX_AOT
         aot_exit_entry(cpu, true);
-#endif
-#ifdef CONFIG_LATX_FAST_JMPCACHE
-        {
-            CPUX86State *x86env = env;
-            if (x86env->tb_jmp_cache_ptr) {
-                free(x86env->tb_jmp_cache_ptr);
-            }
-        }
 #endif
         return get_errno(exit_group(arg1));
 #endif
@@ -16134,6 +16237,9 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
                 a = lock_user(PAGE_WRITE, arg1, arg2, 0);
             }
             if (!a) {
+                a = lock_user(PAGE_VALID, arg1, arg2, 0);
+            }
+            if (!a) {
                 return -TARGET_ENOMEM;
             }
             p = lock_user_string(arg3);
@@ -16759,14 +16865,6 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         if (arg2 == syscall(SYS_gettid))
         {
             aot_exit_entry(cpu, true);
-        }
-#endif
-#ifdef CONFIG_LATX_FAST_JMPCACHE
-        {
-            CPUX86State *x86env = env;
-            if (arg2 == syscall(SYS_gettid) && x86env->tb_jmp_cache_ptr && target_to_host_signal(arg3) == SIGKILL) {
-                free(x86env->tb_jmp_cache_ptr);
-            }
         }
 #endif
         return get_errno(safe_tgkill((int)arg1, (int)arg2,

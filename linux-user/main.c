@@ -212,6 +212,7 @@ void fork_start(void)
     start_exclusive();
     mmap_fork_start();
     sigact_fork_start();
+    path_fork_start();
     cpu_list_lock();
 }
 
@@ -219,6 +220,7 @@ void fork_end(int child)
 {
     mmap_fork_end(child);
     sigact_fork_end(child);
+    path_fork_end(child);
     if (child) {
         CPUState *cpu, *next_cpu;
         /* Child processes created by fork() only have a single thread.
@@ -250,6 +252,25 @@ bool qemu_cpu_is_self(CPUState *cpu)
 
 void qemu_cpu_kick(CPUState *cpu)
 {
+#ifdef CONFIG_LATX
+    /* start_exclusive() has already counted this vCPU as a waiter. */
+    if (option_fork_unlink && cpu->has_waiter) {
+        TaskState *ts = cpu->opaque;
+
+        if (ts && ts->ts_tid > 0) {
+            siginfo_t info = {
+                .si_signo = SIGRTMIN + 1,
+                .si_code = SI_QUEUE,
+                .si_pid = getpid(),
+                .si_uid = getuid(),
+                .si_int = FORK_UNLINK_MAGIC,
+            };
+
+            syscall(SYS_rt_tgsigqueueinfo, getpid(), ts->ts_tid,
+                    SIGRTMIN + 1, &info);
+        }
+    }
+#endif
     cpu_exit(cpu);
 }
 
@@ -747,6 +768,11 @@ static void handle_arg_latx_wine_pe_fixed_address(const char *arg)
     option_wine_pe_fixed_address = g_strdup(arg);
 }
 
+static void handle_arg_latx_fork_unlink(const char *arg)
+{
+    option_fork_unlink = strtol(arg, NULL, 0);
+}
+
 #ifdef CONFIG_LATX_AOT
 static void handle_arg_latx_aot(const char *arg)
 {
@@ -867,6 +893,8 @@ static const struct qemu_argument arg_table[] = {
     {"latx-wine-pe-fixed-address", "LATX_WINE_PE_FIXED_ADDRESS", true,
     handle_arg_latx_wine_pe_fixed_address, "basename@address",
     "load one relocatable Wine PE image at a specified address"},
+    {"latx-fork-unlink",    "LATX_FORK_UNLINK",     true,  handle_arg_latx_fork_unlink,
+    "",           "unlink running vcpu tb chains before fork"},
 #ifdef CONFIG_LATX_AOT
     {"latx-aot",    "LATX_AOT",     true,  handle_arg_latx_aot,
     "",           "enable aot"},
